@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,36 +17,82 @@ limitations under the License.
 package util
 
 import (
+	"net"
 	"regexp"
+	"strings"
 )
 
-const dnsLabelFmt string = "[a-z0-9]([-a-z0-9]*[a-z0-9])?"
+const qnameCharFmt string = "[A-Za-z0-9]"
+const qnameExtCharFmt string = "[-A-Za-z0-9_.]"
+const QualifiedNameFmt string = "(" + qnameCharFmt + qnameExtCharFmt + "*)?" + qnameCharFmt
+const QualifiedNameMaxLength int = 63
 
-var dnsLabelRegexp = regexp.MustCompile("^" + dnsLabelFmt + "$")
+var qualifiedNameRegexp = regexp.MustCompile("^" + QualifiedNameFmt + "$")
 
-const dnsLabelMaxLength int = 63
+func IsQualifiedName(value string) bool {
+	parts := strings.Split(value, "/")
+	var name string
+	switch len(parts) {
+	case 1:
+		name = parts[0]
+	case 2:
+		var prefix string
+		prefix, name = parts[0], parts[1]
+		if prefix == "" || !IsDNS1123Subdomain(prefix) {
+			return false
+		}
+	default:
+		return false
+	}
 
-// IsDNSLabel tests for a string that conforms to the definition of a label in
-// DNS (RFC 1035/1123).
-func IsDNSLabel(value string) bool {
-	return len(value) <= dnsLabelMaxLength && dnsLabelRegexp.MatchString(value)
+	return name != "" && len(name) <= QualifiedNameMaxLength && qualifiedNameRegexp.MatchString(name)
 }
 
-const dnsSubdomainFmt string = dnsLabelFmt + "(\\." + dnsLabelFmt + ")*"
+const LabelValueFmt string = "(" + QualifiedNameFmt + ")?"
+const LabelValueMaxLength int = 63
 
-var dnsSubdomainRegexp = regexp.MustCompile("^" + dnsSubdomainFmt + "$")
+var labelValueRegexp = regexp.MustCompile("^" + LabelValueFmt + "$")
 
-const dnsSubdomainMaxLength int = 253
-
-// IsDNSSubdomain tests for a string that conforms to the definition of a
-// subdomain in DNS (RFC 1035/1123).
-func IsDNSSubdomain(value string) bool {
-	return len(value) <= dnsSubdomainMaxLength && dnsSubdomainRegexp.MatchString(value)
+func IsValidLabelValue(value string) bool {
+	return (len(value) <= LabelValueMaxLength && labelValueRegexp.MatchString(value))
 }
 
-const cIdentifierFmt string = "[A-Za-z_][A-Za-z0-9_]*"
+const DNS1123LabelFmt string = "[a-z0-9]([-a-z0-9]*[a-z0-9])?"
+const DNS1123LabelMaxLength int = 63
 
-var cIdentifierRegexp = regexp.MustCompile("^" + cIdentifierFmt + "$")
+var dns1123LabelRegexp = regexp.MustCompile("^" + DNS1123LabelFmt + "$")
+
+// IsDNS1123Label tests for a string that conforms to the definition of a label in
+// DNS (RFC 1123).
+func IsDNS1123Label(value string) bool {
+	return len(value) <= DNS1123LabelMaxLength && dns1123LabelRegexp.MatchString(value)
+}
+
+const DNS1123SubdomainFmt string = DNS1123LabelFmt + "(\\." + DNS1123LabelFmt + ")*"
+const DNS1123SubdomainMaxLength int = 253
+
+var dns1123SubdomainRegexp = regexp.MustCompile("^" + DNS1123SubdomainFmt + "$")
+
+// IsDNS1123Subdomain tests for a string that conforms to the definition of a
+// subdomain in DNS (RFC 1123).
+func IsDNS1123Subdomain(value string) bool {
+	return len(value) <= DNS1123SubdomainMaxLength && dns1123SubdomainRegexp.MatchString(value)
+}
+
+const DNS952LabelFmt string = "[a-z]([-a-z0-9]*[a-z0-9])?"
+const DNS952LabelMaxLength int = 24
+
+var dns952LabelRegexp = regexp.MustCompile("^" + DNS952LabelFmt + "$")
+
+// IsDNS952Label tests for a string that conforms to the definition of a label in
+// DNS (RFC 952).
+func IsDNS952Label(value string) bool {
+	return len(value) <= DNS952LabelMaxLength && dns952LabelRegexp.MatchString(value)
+}
+
+const CIdentifierFmt string = "[A-Za-z_][A-Za-z0-9_]*"
+
+var cIdentifierRegexp = regexp.MustCompile("^" + CIdentifierFmt + "$")
 
 // IsCIdentifier tests for a string that conforms the definition of an identifier
 // in C. This checks the format, but not the length.
@@ -59,12 +105,7 @@ func IsValidPortNum(port int) bool {
 	return 0 < port && port < 65536
 }
 
-const dns952IdentifierFmt string = "[a-z]([-a-z0-9]*[a-z0-9])?"
-
-var dns952Regexp = regexp.MustCompile("^" + dns952IdentifierFmt + "$")
-
-const dns952MaxLength = 24
-
-func IsDNS952Label(value string) bool {
-	return len(value) <= dns952MaxLength && dns952Regexp.MatchString(value)
+// IsValidIPv4 tests that the argument is a valid IPv4 address.
+func IsValidIPv4(value string) bool {
+	return net.ParseIP(value) != nil && net.ParseIP(value).To4() != nil
 }

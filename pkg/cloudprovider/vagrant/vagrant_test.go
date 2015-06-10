@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -81,12 +81,14 @@ func TestVagrantCloud(t *testing.T) {
 		t.Fatalf("Invalid instance returned")
 	}
 
-	ip, err := vagrantCloud.IPAddress(instances[0])
+	addrs, err := vagrantCloud.NodeAddresses(instances[0])
 	if err != nil {
-		t.Fatalf("Unexpected error, should have returned a valid IP address: %s", err)
+		t.Fatalf("Unexpected error, should have returned valid NodeAddresses: %s", err)
 	}
-
-	if ip.String() != expectedInstanceIP {
+	if len(addrs) != 1 {
+		t.Fatalf("should have returned exactly one NodeAddress: %v", addrs)
+	}
+	if addrs[0].Address != expectedInstanceIP {
 		t.Fatalf("Invalid IP address returned")
 	}
 }

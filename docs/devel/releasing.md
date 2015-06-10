@@ -92,7 +92,7 @@ get` while in fact they do not match `v0.5` (the one that was tagged) exactly.
 To handle that case, creating a new release should involve creating two adjacent
 commits where the first of them will set the version to `v0.5` and the second
 will set it to `v0.5-dev`. In that case, even in the presence of merges, there
-will be a single comit where the exact `v0.5` version will be used and all
+will be a single commit where the exact `v0.5` version will be used and all
 others around it will either have `v0.4-dev` or `v0.5-dev`.
 
 The diagram below illustrates it.
@@ -150,3 +150,19 @@ not present in Docker `v1.2.0`:
   (Non-empty output here means the commit is not present on v1.2.0.)
 ```
 
+## Release Notes
+
+No official release should be made final without properly matching release notes.
+
+There should be made available, per release, a small summary, preamble, of the
+major changes, both in terms of feature improvements/bug fixes and notes about
+functional feature changes (if any) regarding the previous released version so
+that the BOM regarding updating to it gets as obvious and trouble free as possible.
+
+After this summary, preamble, all the relevant PRs/issues that got in that
+version should be listed and linked together with a small summary understandable
+by plain mortals (in a perfect world PR/issue's title would be enough but often
+it is just too cryptic/geeky/domain-specific that it isn't).
+
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/docs/devel/releasing.md?pixel)]()

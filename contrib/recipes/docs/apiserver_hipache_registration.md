@@ -24,9 +24,9 @@ First, create your kube-apiserver.service file (change necessary variables)
     ExecStartPre=/usr/bin/wget -P /opt/bin https://path/to/kube-apiserver/binary
     ExecStartPre=/usr/bin/chmod +x /opt/bin/kube-apiserver
     ExecStart=/opt/bin/kube-apiserver \
-    -address=0.0.0.0 \
-    -port=8080 \
-    -etcd_servers=http://10.1.10.10:4001
+    --address=0.0.0.0 \
+    --port=8080 \
+    --etcd_servers=http://10.1.10.10:4001
     ExecStartPost=/usr/bin/etcdctl -C 10.1.10.10:4001 set /frontend:172.20.1.20 '[ "kubernetes", "http://${DEFAULT_IPV4}:8080" ]'
     Restart=always
     RestartSec=10
@@ -104,3 +104,6 @@ That's it! Fleet will schedule the apiserver on one of your minions and once it'
 twitter @jeefy
 
 irc.freenode.net #kubernetes jeefy
+
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/contrib/recipes/docs/apiserver_hipache_registration.md?pixel)]()

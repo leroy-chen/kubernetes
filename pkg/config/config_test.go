@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,12 +21,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/latest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/testapi"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 )
@@ -35,7 +36,7 @@ func getTyperAndMapper() (runtime.ObjectTyper, meta.RESTMapper) {
 	return api.Scheme, latest.RESTMapper
 }
 
-func getFakeClient(t *testing.T, validURLs []string) (ClientFunc, *httptest.Server) {
+func getFakeClient(t *testing.T, validURLs []string) (ClientPosterFunc, *httptest.Server) {
 	handlerFunc := func(w http.ResponseWriter, r *http.Request) {
 		for _, u := range validURLs {
 			if u == r.RequestURI {
@@ -45,10 +46,11 @@ func getFakeClient(t *testing.T, validURLs []string) (ClientFunc, *httptest.Serv
 		t.Errorf("Unexpected HTTP request: %s, expected %v", r.RequestURI, validURLs)
 	}
 	server := httptest.NewServer(http.HandlerFunc(handlerFunc))
-	return func(mapping *meta.RESTMapping) (*client.RESTClient, error) {
-		fakeCodec := runtime.CodecFor(api.Scheme, "v1beta1")
-		fakeUri, _ := url.Parse(server.URL + "/api/v1beta1")
-		return client.NewRESTClient(fakeUri, fakeCodec), nil
+	return func(mapping *meta.RESTMapping) (RESTClientPoster, error) {
+		fakeCodec := testapi.Codec()
+		fakeUri, _ := url.Parse(server.URL + "/api/" + testapi.Version())
+		legacyBehavior := api.PreV1Beta3(testapi.Version())
+		return client.NewRESTClient(fakeUri, testapi.Version(), fakeCodec, legacyBehavior, 5, 10), nil
 	}, server
 }
 
@@ -56,17 +58,18 @@ func TestCreateObjects(t *testing.T) {
 	items := []runtime.Object{}
 
 	items = append(items, &api.Pod{
-		TypeMeta:   api.TypeMeta{APIVersion: "v1beta1", Kind: "Pod"},
-		ObjectMeta: api.ObjectMeta{Name: "test-pod"},
+		ObjectMeta: api.ObjectMeta{Name: "test-pod", Namespace: "default"},
 	})
 
 	items = append(items, &api.Service{
-		TypeMeta:   api.TypeMeta{APIVersion: "v1beta1", Kind: "Service"},
-		ObjectMeta: api.ObjectMeta{Name: "test-service"},
+		ObjectMeta: api.ObjectMeta{Name: "test-service", Namespace: "default"},
 	})
 
 	typer, mapper := getTyperAndMapper()
-	client, s := getFakeClient(t, []string{"/api/v1beta1/pods", "/api/v1beta1/services"})
+	client, s := getFakeClient(t, []string{
+		testapi.ResourcePathWithNamespaceQuery("pods", api.NamespaceDefault, ""),
+		testapi.ResourcePathWithNamespaceQuery("services", api.NamespaceDefault, ""),
+	})
 
 	errs := CreateObjects(typer, mapper, client, items)
 	s.Close()
@@ -79,11 +82,13 @@ func TestCreateNoNameItem(t *testing.T) {
 	items := []runtime.Object{}
 
 	items = append(items, &api.Service{
-		TypeMeta: api.TypeMeta{APIVersion: "v1beta1", Kind: "Service"},
+		TypeMeta: api.TypeMeta{APIVersion: testapi.Version(), Kind: "Service"},
 	})
 
 	typer, mapper := getTyperAndMapper()
-	client, s := getFakeClient(t, []string{"/api/v1beta1/services"})
+	client, s := getFakeClient(t, []string{
+		testapi.ResourcePath("services", api.NamespaceDefault, ""),
+	})
 
 	errs := CreateObjects(typer, mapper, client, items)
 	s.Close()
@@ -92,13 +97,9 @@ func TestCreateNoNameItem(t *testing.T) {
 		t.Errorf("Expected required value error for missing name")
 	}
 
-	e := errs[0].(errors.ValidationError)
-	if errors.ValueOf(e.Type) != "required value" {
-		t.Errorf("Expected ValidationErrorTypeRequired error, got %#v", e)
-	}
-
-	if e.Field != "Config.item[0].name" {
-		t.Errorf("Expected 'Config.item[0].name' as error field, got '%#v'", e.Field)
+	errStr := errs[0].Error()
+	if !strings.Contains(errStr, "Config.item[0]: name") {
+		t.Errorf("Expected 'Config.item[0]: name' in error string, got '%s'", errStr)
 	}
 }
 
@@ -121,13 +122,9 @@ func TestCreateInvalidItem(t *testing.T) {
 		t.Errorf("Expected invalid value error for kind")
 	}
 
-	e := errs[0].(errors.ValidationError)
-	if errors.ValueOf(e.Type) != "invalid value" {
-		t.Errorf("Expected ValidationErrorTypeInvalid error, got %#v", e)
-	}
-
-	if e.Field != "Config.item[0].kind" {
-		t.Errorf("Expected 'Config.item[0].kind' as error field, got '%#v'", e.Field)
+	errStr := errs[0].Error()
+	if !strings.Contains(errStr, "Config.item[0] kind") {
+		t.Errorf("Expected 'Config.item[0] kind' in error string, got '%s'", errStr)
 	}
 }
 
@@ -135,14 +132,17 @@ func TestCreateNoClientItems(t *testing.T) {
 	items := []runtime.Object{}
 
 	items = append(items, &api.Pod{
-		TypeMeta:   api.TypeMeta{APIVersion: "v1beta1", Kind: "Pod"},
+		TypeMeta:   api.TypeMeta{APIVersion: testapi.Version(), Kind: "Pod"},
 		ObjectMeta: api.ObjectMeta{Name: "test-pod"},
 	})
 
 	typer, mapper := getTyperAndMapper()
-	_, s := getFakeClient(t, []string{"/api/v1beta1/pods", "/api/v1beta1/services"})
+	_, s := getFakeClient(t, []string{
+		testapi.ResourcePath("pods", api.NamespaceDefault, ""),
+		testapi.ResourcePath("services", api.NamespaceDefault, ""),
+	})
 
-	noClientFunc := func(mapping *meta.RESTMapping) (*client.RESTClient, error) {
+	noClientFunc := func(mapping *meta.RESTMapping) (RESTClientPoster, error) {
 		return nil, fmt.Errorf("no client")
 	}
 
@@ -153,12 +153,8 @@ func TestCreateNoClientItems(t *testing.T) {
 		t.Errorf("Expected invalid value error for client")
 	}
 
-	e := errs[0].(errors.ValidationError)
-	if errors.ValueOf(e.Type) != "unsupported value" {
-		t.Errorf("Expected ValidationErrorTypeUnsupported error, got %#v", e)
-	}
-
-	if e.Field != "Config.item[0].client" {
-		t.Errorf("Expected 'Config.item[0].client' as error field, got '%#v'", e.Field)
+	errStr := errs[0].Error()
+	if !strings.Contains(errStr, "Config.item[0] client") {
+		t.Errorf("Expected 'Config.item[0] client' in error string, got '%s'", errStr)
 	}
 }

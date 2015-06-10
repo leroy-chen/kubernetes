@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,86 +21,173 @@ import (
 	"io"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
+	cmdutil "github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/cmd/util"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/resource"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 
 	"github.com/spf13/cobra"
 )
 
-func (f *Factory) NewCmdGet(out io.Writer) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "get [(-o|--output=)json|yaml|...] <resource> [<id>]",
-		Short: "Display one or many resources",
-		Long: `Display one or many resources.
+const (
+	get_long = `Display one or many resources.
 
 Possible resources include pods (po), replication controllers (rc), services
-(se), minions (mi), or events (ev).
+(svc), nodes, events (ev), component statuses (cs), limit ranges (limits),
+nodes (no), persistent volumes (pv), persistent volume claims (pvc)
+or resource quotas (quota).
 
-If you specify a Go template, you can use any fields defined for the API version
-you are connecting to the server with.
+By specifying the output as 'template' and providing a Go template as the value
+of the --template flag, you can filter the attributes of the fetched resource(s).`
+	get_example = `// List all pods in ps output format.
+$ kubectl get pods
 
-Examples:
-  $ kubectl get pods
-  <list all pods in ps output format>
+// List a single replication controller with specified NAME in ps output format.
+$ kubectl get replicationcontroller web
 
-  $ kubectl get replicationController 1234-56-7890-234234-456456
-  <list single replication controller in ps output format>
+// List a single pod in JSON output format.
+$ kubectl get -o json pod web-pod-13je7
 
-  $ kubectl get -f json pod 1234-56-7890-234234-456456
-  <list single pod in json output format>`,
+// Return only the phase value of the specified pod.
+$ kubectl get -o template web-pod-13je7 --template={{.status.phase}} --api-version=v1
+
+// List all replication controllers and services together in ps output format.
+$ kubectl get rc,services
+
+// List one or more resources by their type and names
+$ kubectl get rc/web service/frontend pods/web-pod-13je7`
+)
+
+// NewCmdGet creates a command object for the generic "get" action, which
+// retrieves one or more resources from a server.
+func NewCmdGet(f *cmdutil.Factory, out io.Writer) *cobra.Command {
+	p := kubectl.NewHumanReadablePrinter(false, false)
+	validArgs := p.HandledResources()
+
+	cmd := &cobra.Command{
+		Use:     "get [(-o|--output=)json|yaml|template|...] (RESOURCE [NAME] | RESOURCE/NAME ...)",
+		Short:   "Display one or many resources",
+		Long:    get_long,
+		Example: get_example,
 		Run: func(cmd *cobra.Command, args []string) {
-			mapping, namespace, name := ResourceOrTypeFromArgs(cmd, args, f.Mapper)
-
-			selector := GetFlagString(cmd, "selector")
-			labelSelector, err := labels.ParseSelector(selector)
-			checkErr(err)
-
-			client, err := f.Client(cmd, mapping)
-			checkErr(err)
-
-			outputFormat := GetFlagString(cmd, "output")
-			templateFile := GetFlagString(cmd, "template")
-			defaultPrinter, err := f.Printer(cmd, mapping, GetFlagBool(cmd, "no-headers"))
-			checkErr(err)
-
-			outputVersion := GetFlagString(cmd, "output-version")
-			if len(outputVersion) == 0 {
-				outputVersion = mapping.APIVersion
-			}
-
-			printer, err := kubectl.GetPrinter(outputFormat, templateFile, outputVersion, mapping.ObjectConvertor, defaultPrinter)
-			checkErr(err)
-
-			restHelper := kubectl.NewRESTHelper(client, mapping)
-			obj, err := restHelper.Get(namespace, name, labelSelector)
-			checkErr(err)
-
-			isWatch, isWatchOnly := GetFlagBool(cmd, "watch"), GetFlagBool(cmd, "watch-only")
-
-			// print the current object
-			if !isWatchOnly {
-				if err := printer.PrintObj(obj, out); err != nil {
-					checkErr(fmt.Errorf("Unable to output the provided object: %v", err))
-				}
-			}
-
-			// print watched changes
-			if isWatch || isWatchOnly {
-				rv, err := mapping.MetadataAccessor.ResourceVersion(obj)
-				checkErr(err)
-
-				w, err := restHelper.Watch(namespace, rv, labelSelector, labels.Everything())
-				checkErr(err)
-
-				kubectl.WatchLoop(w, printer, out)
-			}
+			err := RunGet(f, out, cmd, args)
+			cmdutil.CheckErr(err)
 		},
+		ValidArgs: validArgs,
 	}
-	cmd.Flags().StringP("output", "o", "", "Output format: json|yaml|template|templatefile")
-	cmd.Flags().String("output-version", "", "Output the formatted object with the given version (default api-version)")
-	cmd.Flags().Bool("no-headers", false, "When using the default output, don't print headers")
-	cmd.Flags().StringP("template", "t", "", "Template string or path to template file to use when --output=template or --output=templatefile")
+	cmdutil.AddPrinterFlags(cmd)
 	cmd.Flags().StringP("selector", "l", "", "Selector (label query) to filter on")
 	cmd.Flags().BoolP("watch", "w", false, "After listing/getting the requested object, watch for changes.")
-	cmd.Flags().Bool("watch-only", false, "Watch for changes to the requseted object(s), without listing/getting first.")
+	cmd.Flags().Bool("watch-only", false, "Watch for changes to the requested object(s), without listing/getting first.")
+	cmd.Flags().Bool("all-namespaces", false, "If present, list the requested object(s) across all namespaces. Namespace in current context is ignored even if specified with --namespace.")
 	return cmd
+}
+
+// RunGet implements the generic Get command
+// TODO: convert all direct flag accessors to a struct and pass that instead of cmd
+func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string) error {
+	selector := cmdutil.GetFlagString(cmd, "selector")
+	allNamespaces := cmdutil.GetFlagBool(cmd, "all-namespaces")
+	mapper, typer := f.Object()
+
+	cmdNamespace, err := f.DefaultNamespace()
+	if err != nil {
+		return err
+	}
+
+	// handle watch separately since we cannot watch multiple resource types
+	isWatch, isWatchOnly := cmdutil.GetFlagBool(cmd, "watch"), cmdutil.GetFlagBool(cmd, "watch-only")
+	if isWatch || isWatchOnly {
+		r := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand()).
+			NamespaceParam(cmdNamespace).DefaultNamespace().AllNamespaces(allNamespaces).
+			SelectorParam(selector).
+			ResourceTypeOrNameArgs(true, args...).
+			SingleResourceType().
+			Do()
+		if err != nil {
+			return err
+		}
+
+		mapping, err := r.ResourceMapping()
+		if err != nil {
+			return err
+		}
+
+		printer, err := f.PrinterForMapping(cmd, mapping, allNamespaces)
+		if err != nil {
+			return err
+		}
+
+		obj, err := r.Object()
+		if err != nil {
+			return err
+		}
+
+		rv, err := mapping.MetadataAccessor.ResourceVersion(obj)
+		if err != nil {
+			return err
+		}
+
+		// print the current object
+		if !isWatchOnly {
+			if err := printer.PrintObj(obj, out); err != nil {
+				return fmt.Errorf("unable to output the provided object: %v", err)
+			}
+		}
+
+		// print watched changes
+		w, err := r.Watch(rv)
+		if err != nil {
+			return err
+		}
+
+		kubectl.WatchLoop(w, func(e watch.Event) error {
+			return printer.PrintObj(e.Object, out)
+		})
+		return nil
+	}
+
+	b := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand()).
+		NamespaceParam(cmdNamespace).DefaultNamespace().AllNamespaces(allNamespaces).
+		SelectorParam(selector).
+		ResourceTypeOrNameArgs(true, args...).
+		ContinueOnError().
+		Latest()
+	printer, generic, err := cmdutil.PrinterForCommand(cmd)
+	if err != nil {
+		return err
+	}
+
+	if generic {
+		clientConfig, err := f.ClientConfig()
+		if err != nil {
+			return err
+		}
+		defaultVersion := clientConfig.Version
+
+		singular := false
+		r := b.Flatten().Do()
+		infos, err := r.IntoSingular(&singular).Infos()
+		if err != nil {
+			return err
+		}
+
+		// the outermost object will be converted to the output-version, but inner
+		// objects can use their mappings
+		version := cmdutil.OutputVersion(cmd, defaultVersion)
+		obj, err := resource.AsVersionedObject(infos, !singular, version)
+		if err != nil {
+			return err
+		}
+
+		return printer.PrintObj(obj, out)
+	}
+
+	// use the default printer for each object
+	return b.Do().Visit(func(r *resource.Info) error {
+		printer, err := f.PrinterForMapping(cmd, r.Mapping, allNamespaces)
+		if err != nil {
+			return err
+		}
+		return printer.PrintObj(r.Object, out)
+	})
 }

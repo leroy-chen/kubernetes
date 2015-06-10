@@ -1,29 +1,26 @@
 # Kubernetes Documentation
 
-Kubernetes documentation is organized into several categories.
+**Note**
+This documentation is current for HEAD.
 
-  - **Getting Started Guides**
-    - for people who want to create a kubernetes cluster
-    - in [docs/getting-started-guides](./getting-started-guides)
-  - **User Documentation**
-    - in [docs](./overview.md)
-    - for people who want to run programs on kubernetes
-    - describes current features of the system (with brief mentions of planned features)
-  - **Developer Documentation**
-    - in [docs/devel](./devel)
-    - for people who want to contribute code to kubernetes
-    - covers development conventions
-    - explains current architecture and project plans
-  - **Design Documentation**
-    - in [docs/design](./design)
-    - for people who want to understand the design choices made
-    - describes tradeoffs, alternative designs
-    - descriptions of planned features that are too long for a github issue.
-  - **Walkthroughs and Examples**
-    - in [examples](../examples)
-    - Hands on introduction and example config files
-  - **API documentation**
-    - in [the API conventions doc](api-conventions.md)
-    - and automatically generated API documentation served by the master
-  - **Wiki**
-    - in [wiki](https://github.com/GoogleCloudPlatform/kubernetes/wiki)
+Documentation for previous releases is available in their respective branches:
+   * [v0.18.1](https://github.com/GoogleCloudPlatform/kubernetes/tree/release-0.18/docs)
+   * [v0.17.1](https://github.com/GoogleCloudPlatform/kubernetes/tree/release-0.17/docs)
+
+* The [User's guide](user-guide.md) is for anyone who wants to run programs and services on an exisiting Kubernetes cluster.
+
+* The [Cluster Admin's guide](cluster-admin-guide.md) is for anyone setting up a Kubernetes cluster or administering it.
+
+* The [Developer guide](developer-guide.md) is for anyone wanting to write programs that access the kubernetes API,
+ write plugins or extensions, or modify the core code of kubernetes.
+
+* The [Kubectl Command Line Interface](kubectl.md) is a detailed reference on the `kubectl` CLI.
+
+* The [API object documentation](http://kubernetes.io/third_party/swagger-ui/) is a detailed description of all fields found in core API objects.
+
+* An overview of the [Design of Kubernetes](design)
+
+* There are example files and walkthroughs in the [examples](../examples) folder.
+
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/docs/README.md?pixel)]()

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 Google Inc. All rights reserved.
+# Copyright 2014 The Kubernetes Authors All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,4 +17,4 @@
 set -e
 set -x
 
-CGO_ENABLED=0 go build  -a -ldflags '-extldflags "-static" -s' hello.go
+CGO_ENABLED=0 go build -a -installsuffix cgo -ldflags '-extldflags "-static" -s' hello.go

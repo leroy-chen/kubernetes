@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,113 +17,103 @@ limitations under the License.
 package client
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io/ioutil"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/health"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/probe"
+	httprobe "github.com/GoogleCloudPlatform/kubernetes/pkg/probe/http"
 )
-
-// ErrPodInfoNotAvailable may be returned when the requested pod info is not available.
-var ErrPodInfoNotAvailable = errors.New("no pod info available")
 
 // KubeletClient is an interface for all kubelet functionality
 type KubeletClient interface {
 	KubeletHealthChecker
-	PodInfoGetter
+	ConnectionInfoGetter
 }
 
 // KubeletHealthchecker is an interface for healthchecking kubelets
 type KubeletHealthChecker interface {
-	HealthCheck(host string) (health.Status, error)
+	HealthCheck(host string) (result probe.Result, output string, err error)
 }
 
-// PodInfoGetter is an interface for things that can get information about a pod's containers.
-// Injectable for easy testing.
-type PodInfoGetter interface {
-	// GetPodInfo returns information about all containers which are part
-	// Returns an api.PodInfo, or an error if one occurs.
-	GetPodInfo(host, podNamespace, podID string) (api.PodInfo, error)
+type ConnectionInfoGetter interface {
+	GetConnectionInfo(host string) (scheme string, port uint, transport http.RoundTripper, err error)
 }
 
-// HTTPKubeletClient is the default implementation of PodInfoGetter and KubeletHealthchecker, accesses the kubelet over HTTP.
+// HTTPKubeletClient is the default implementation of KubeletHealthchecker, accesses the kubelet over HTTP.
 type HTTPKubeletClient struct {
 	Client      *http.Client
+	Config      *KubeletConfig
 	Port        uint
 	EnableHttps bool
 }
 
-func NewKubeletClient(config *KubeletConfig) (KubeletClient, error) {
-	transport := http.DefaultTransport
-	if config.CAFile != "" {
-		t, err := NewClientCertTLSTransport(config.CertFile, config.KeyFile, config.CAFile)
-		if err != nil {
-			return nil, err
+func MakeTransport(config *KubeletConfig) (http.RoundTripper, error) {
+	cfg := &Config{TLSClientConfig: config.TLSClientConfig}
+	if config.EnableHttps {
+		hasCA := len(config.CAFile) > 0 || len(config.CAData) > 0
+		if !hasCA {
+			cfg.Insecure = true
 		}
-		transport = t
 	}
+	tlsConfig, err := TLSConfigFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if config.Dial != nil || tlsConfig != nil {
+		return &http.Transport{
+			Dial:            config.Dial,
+			TLSClientConfig: tlsConfig,
+		}, nil
+	} else {
+		return http.DefaultTransport, nil
+	}
+}
 
-	c := &http.Client{Transport: transport}
+// TODO: this structure is questionable, it should be using client.Config and overriding defaults.
+func NewKubeletClient(config *KubeletConfig) (KubeletClient, error) {
+	transport, err := MakeTransport(config)
+	if err != nil {
+		return nil, err
+	}
+	c := &http.Client{
+		Transport: transport,
+		Timeout:   config.HTTPTimeout,
+	}
 	return &HTTPKubeletClient{
 		Client:      c,
+		Config:      config,
 		Port:        config.Port,
 		EnableHttps: config.EnableHttps,
 	}, nil
 }
 
-func (c *HTTPKubeletClient) url(host string) string {
-	scheme := "http://"
+func (c *HTTPKubeletClient) GetConnectionInfo(host string) (string, uint, http.RoundTripper, error) {
+	scheme := "http"
 	if c.EnableHttps {
-		scheme = "https://"
+		scheme = "https"
 	}
-
-	return fmt.Sprintf(
-		"%s%s",
-		scheme,
-		net.JoinHostPort(host, strconv.FormatUint(uint64(c.Port), 10)))
+	return scheme, c.Port, c.Client.Transport, nil
 }
 
-// GetPodInfo gets information about the specified pod.
-func (c *HTTPKubeletClient) GetPodInfo(host, podNamespace, podID string) (api.PodInfo, error) {
-	request, err := http.NewRequest(
-		"GET",
-		fmt.Sprintf(
-			"%s/podInfo?podID=%s&podNamespace=%s",
-			c.url(host),
-			podID,
-			podNamespace),
-		nil)
-	if err != nil {
-		return nil, err
+func (c *HTTPKubeletClient) url(host, path, query string) string {
+	scheme := "http"
+	if c.EnableHttps {
+		scheme = "https"
 	}
-	response, err := c.Client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound {
-		return nil, ErrPodInfoNotAvailable
-	}
-	body, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		return nil, err
-	}
-	// Check that this data can be unmarshalled
-	info := api.PodInfo{}
-	err = json.Unmarshal(body, &info)
-	if err != nil {
-		return nil, err
-	}
-	return info, nil
+
+	return (&url.URL{
+		Scheme:   scheme,
+		Host:     net.JoinHostPort(host, strconv.FormatUint(uint64(c.Port), 10)),
+		Path:     path,
+		RawQuery: query,
+	}).String()
 }
 
-func (c *HTTPKubeletClient) HealthCheck(host string) (health.Status, error) {
-	return health.DoHTTPCheck(fmt.Sprintf("%s/healthz", c.url(host)), c.Client)
+func (c *HTTPKubeletClient) HealthCheck(host string) (probe.Result, string, error) {
+	return httprobe.DoHTTPProbe(c.url(host, "/healthz", ""), c.Client)
 }
 
 // FakeKubeletClient is a fake implementation of KubeletClient which returns an error
@@ -131,11 +121,10 @@ func (c *HTTPKubeletClient) HealthCheck(host string) (health.Status, error) {
 // no kubelets.
 type FakeKubeletClient struct{}
 
-// GetPodInfo is a fake implementation of PodInfoGetter.GetPodInfo.
-func (c FakeKubeletClient) GetPodInfo(host, podNamespace string, podID string) (api.PodInfo, error) {
-	return api.PodInfo{}, errors.New("Not Implemented")
+func (c FakeKubeletClient) HealthCheck(host string) (probe.Result, string, error) {
+	return probe.Unknown, "", errors.New("Not Implemented")
 }
 
-func (c FakeKubeletClient) HealthCheck(host string) (health.Status, error) {
-	return health.Unknown, errors.New("Not Implemented")
+func (c FakeKubeletClient) GetConnectionInfo(host string) (string, uint, http.RoundTripper, error) {
+	return "", 0, nil, errors.New("Not Implemented")
 }

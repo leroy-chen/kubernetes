@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ Most consumers should use the Config object to create a Client:
     if err != nil {
       // handle error
     }
-    client.ListPods()
+    client.Pods(ns).List()
 
 More advanced consumers may wish to provide their own transport via a http.RoundTripper:
 

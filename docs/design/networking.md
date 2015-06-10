@@ -40,11 +40,12 @@ We set up this bridge on each node with SaltStack, in [container_bridge.py](clus
 
 We make these addresses routable in GCE:
 
-     gcutil addroute ${MINION_NAMES[$i]} ${MINION_IP_RANGES[$i]} \
-     --norespect_terminal_width \
-     --project ${PROJECT} \
-     --network ${NETWORK} \
-     --next_hop_instance ${ZONE}/instances/${MINION_NAMES[$i]} &
+    gcloud compute routes add "${MINION_NAMES[$i]}" \
+      --project "${PROJECT}" \
+      --destination-range "${MINION_IP_RANGES[$i]}" \
+      --network "${NETWORK}" \
+      --next-hop-instance "${MINION_NAMES[$i]}" \
+      --next-hop-instance-zone "${ZONE}" &
 
 The minion IP ranges are /24s in the 10-dot space.
 
@@ -61,7 +62,7 @@ Docker allocates IP addresses from a bridge we create on each node, using its �
   - creates a new pair of veth devices and binds them to the netns
   - auto-assigns an IP from docker’s IP range
 
-2. Create the user containers and specify the name of the network container as their “net” argument. Docker finds the PID of the command running in the network container and attaches to the netns of that PID.
+2. Create the user containers and specify the name of the pod infra container as their “POD” argument. Docker finds the PID of the command running in the pod infra container and attaches to the netns and ipcns of that PID.
 
 ### Other networking implementation examples
 With the primary aim of providing IP-per-pod-model, other implementations exist to serve the purpose outside of GCE.
@@ -76,13 +77,13 @@ Right now, docker inspect doesn't show the networking configuration of the conta
 
 ### External IP assignment
 
-We want to be able to assign IP addresses externally from Docker ([Docker issue #6743](https://github.com/dotcloud/docker/issues/6743)) so that we don't need to statically allocate fixed-size IP ranges to each node, so that IP addresses can be made stable across network container restarts ([Docker issue #2801](https://github.com/dotcloud/docker/issues/2801)), and to facilitate pod migration. Right now, if the network container dies, all the user containers must be stopped and restarted because the netns of the network container will change on restart, and any subsequent user container restart will join that new netns, thereby not being able to see its peers. Additionally, a change in IP address would encounter DNS caching/TTL problems. External IP assignment would also simplify DNS support (see below).
+We want to be able to assign IP addresses externally from Docker ([Docker issue #6743](https://github.com/dotcloud/docker/issues/6743)) so that we don't need to statically allocate fixed-size IP ranges to each node, so that IP addresses can be made stable across pod infra container restarts ([Docker issue #2801](https://github.com/dotcloud/docker/issues/2801)), and to facilitate pod migration. Right now, if the pod infra container dies, all the user containers must be stopped and restarted because the netns of the pod infra container will change on restart, and any subsequent user container restart will join that new netns, thereby not being able to see its peers. Additionally, a change in IP address would encounter DNS caching/TTL problems. External IP assignment would also simplify DNS support (see below).
 
 ### Naming, discovery, and load balancing
 
 In addition to enabling self-registration with 3rd-party discovery mechanisms, we'd like to setup DDNS automatically ([Issue #146](https://github.com/GoogleCloudPlatform/kubernetes/issues/146)). hostname, $HOSTNAME, etc. should return a name for the pod ([Issue #298](https://github.com/GoogleCloudPlatform/kubernetes/issues/298)), and gethostbyname should be able to resolve names of other pods. Probably we need to set up a DNS resolver to do the latter ([Docker issue #2267](https://github.com/dotcloud/docker/issues/2267)), so that we don't need to keep /etc/hosts files up to date dynamically.
 
-[Service](https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/services.md) endpoints are currently found through environment variables.  Both [Docker-links-compatible](https://docs.docker.com/userguide/dockerlinks/) variables and kubernetes-specific variables ({NAME}_SERVICE_HOST and {NAME}_SERVICE_BAR) are supported, and resolve to ports opened by the service proxy. We don't actually use [the Docker ambassador pattern](https://docs.docker.com/articles/ambassador_pattern_linking/) to link containers because we don't require applications to identify all clients at configuration time, yet.  While services today are managed by the service proxy, this is an implementation detail that applications should not rely on.  Clients should instead use the [service portal IP](https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/services.md) (which the above environment variables will resolve to).  However, a flat service namespace doesn't scale and environment variables don't permit dynamic updates, which complicates service deployment by imposing implicit ordering constraints.  We intend to register each service portal IP in DNS, and for that to become the preferred resolution protocol.
+[Service](http://docs.k8s.io/services.md) endpoints are currently found through environment variables.  Both [Docker-links-compatible](https://docs.docker.com/userguide/dockerlinks/) variables and kubernetes-specific variables ({NAME}_SERVICE_HOST and {NAME}_SERVICE_BAR) are supported, and resolve to ports opened by the service proxy. We don't actually use [the Docker ambassador pattern](https://docs.docker.com/articles/ambassador_pattern_linking/) to link containers because we don't require applications to identify all clients at configuration time, yet.  While services today are managed by the service proxy, this is an implementation detail that applications should not rely on.  Clients should instead use the [service IP](http://docs.k8s.io/services.md) (which the above environment variables will resolve to).  However, a flat service namespace doesn't scale and environment variables don't permit dynamic updates, which complicates service deployment by imposing implicit ordering constraints.  We intend to register each service's IP in DNS, and for that to become the preferred resolution protocol.
 
 We'd also like to accommodate other load-balancing solutions (e.g., HAProxy), non-load-balanced services ([Issue #260](https://github.com/GoogleCloudPlatform/kubernetes/issues/260)), and other types of groups (worker pools, etc.). Providing the ability to Watch a label selector applied to pod addresses would enable efficient monitoring of group membership, which could be directly consumed or synced with a discovery mechanism. Event hooks ([Issue #140](https://github.com/GoogleCloudPlatform/kubernetes/issues/140)) for join/leave events would probably make this even easier.
 
@@ -105,3 +106,6 @@ Another approach could be to create a new host interface alias for each pod, if 
 ### IPv6
 
 IPv6 would be a nice option, also, but we can't depend on it yet. Docker support is in progress: [Docker issue #2974](https://github.com/dotcloud/docker/issues/2974), [Docker issue #6923](https://github.com/dotcloud/docker/issues/6923), [Docker issue #6975](https://github.com/dotcloud/docker/issues/6975). Additionally, direct ipv6 assignment to instances doesn't appear to be supported by major cloud providers (e.g., AWS EC2, GCE) yet. We'd happily take pull requests from people running Kubernetes on bare metal, though. :-)
+
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/docs/design/networking.md?pixel)]()

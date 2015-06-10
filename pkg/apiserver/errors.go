@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
-	"github.com/golang/glog"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
 // statusError is an object that can be converted into an api.Status
@@ -35,7 +35,17 @@ func errToAPIStatus(err error) *api.Status {
 	switch t := err.(type) {
 	case statusError:
 		status := t.Status()
-		status.Status = api.StatusFailure
+		if len(status.Status) == 0 {
+			status.Status = api.StatusFailure
+		}
+		if status.Code == 0 {
+			switch status.Status {
+			case api.StatusSuccess:
+				status.Code = http.StatusOK
+			case api.StatusFailure:
+				status.Code = http.StatusInternalServerError
+			}
+		}
 		//TODO: check for invalid responses
 		return &status
 	default:
@@ -49,7 +59,7 @@ func errToAPIStatus(err error) *api.Status {
 		// by REST storage - these typically indicate programmer
 		// error by not using pkg/api/errors, or unexpected failure
 		// cases.
-		glog.V(1).Infof("An unchecked error was received: %v", err)
+		util.HandleError(fmt.Errorf("apiserver received an error that is not an api.Status: %v", err))
 		return &api.Status{
 			Status:  api.StatusFailure,
 			Code:    status,

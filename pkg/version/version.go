@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,11 +20,11 @@ package version
 // TODO: Add []string of api versions supported? It's still unclear
 // how we'll want to distribute that information.
 type Info struct {
-	Major        string `json:"major" yaml:"major"`
-	Minor        string `json:"minor" yaml:"minor"`
-	GitVersion   string `json:"gitVersion" yaml:"gitVersion"`
-	GitCommit    string `json:"gitCommit" yaml:"gitCommit"`
-	GitTreeState string `json:"gitTreeState" yaml:"gitTreeState"`
+	Major        string `json:"major"`
+	Minor        string `json:"minor"`
+	GitVersion   string `json:"gitVersion"`
+	GitCommit    string `json:"gitCommit"`
+	GitTreeState string `json:"gitTreeState"`
 }
 
 // Get returns the overall codebase version. It's for detecting

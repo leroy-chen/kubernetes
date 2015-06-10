@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,128 +17,152 @@ limitations under the License.
 package minion
 
 import (
-	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	kerrors "github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/validation"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/fielderrors"
+	nodeutil "github.com/GoogleCloudPlatform/kubernetes/pkg/util/node"
 )
 
-// REST implements the RESTStorage interface, backed by a MinionRegistry.
-type REST struct {
-	registry Registry
+// nodeStrategy implements behavior for nodes
+type nodeStrategy struct {
+	runtime.ObjectTyper
+	api.NameGenerator
 }
 
-// NewREST returns a new REST.
-func NewREST(m Registry) *REST {
-	return &REST{
-		registry: m,
+// Nodes is the default logic that applies when creating and updating Node
+// objects.
+var Strategy = nodeStrategy{api.Scheme, api.SimpleNameGenerator}
+
+// NamespaceScoped is false for nodes.
+func (nodeStrategy) NamespaceScoped() bool {
+	return false
+}
+
+// AllowCreateOnUpdate is false for nodes.
+func (nodeStrategy) AllowCreateOnUpdate() bool {
+	return false
+}
+
+// PrepareForCreate clears fields that are not allowed to be set by end users on creation.
+func (nodeStrategy) PrepareForCreate(obj runtime.Object) {
+	_ = obj.(*api.Node)
+	// Nodes allow *all* fields, including status, to be set on create.
+}
+
+// PrepareForUpdate clears fields that are not allowed to be set by end users on update.
+func (nodeStrategy) PrepareForUpdate(obj, old runtime.Object) {
+	newNode := obj.(*api.Node)
+	oldNode := old.(*api.Node)
+	newNode.Status = oldNode.Status
+}
+
+// Validate validates a new node.
+func (nodeStrategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
+	node := obj.(*api.Node)
+	return validation.ValidateNode(node)
+}
+
+// ValidateUpdate is the default update validation for an end user.
+func (nodeStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+	errorList := validation.ValidateNode(obj.(*api.Node))
+	return append(errorList, validation.ValidateNodeUpdate(old.(*api.Node), obj.(*api.Node))...)
+}
+
+type nodeStatusStrategy struct {
+	nodeStrategy
+}
+
+var StatusStrategy = nodeStatusStrategy{Strategy}
+
+func (nodeStatusStrategy) PrepareForCreate(obj runtime.Object) {
+	_ = obj.(*api.Node)
+	// Nodes allow *all* fields, including status, to be set on create.
+}
+
+func (nodeStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
+	newNode := obj.(*api.Node)
+	oldNode := old.(*api.Node)
+	newNode.Spec = oldNode.Spec
+}
+
+func (nodeStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+	return validation.ValidateNodeUpdate(old.(*api.Node), obj.(*api.Node))
+}
+
+// ResourceGetter is an interface for retrieving resources by ResourceLocation.
+type ResourceGetter interface {
+	Get(api.Context, string) (runtime.Object, error)
+}
+
+// NodeToSelectableFields returns a label set that represents the object.
+func NodeToSelectableFields(node *api.Node) fields.Set {
+	return fields.Set{
+		"metadata.name":      node.Name,
+		"spec.unschedulable": fmt.Sprint(node.Spec.Unschedulable),
 	}
 }
 
-var ErrDoesNotExist = errors.New("The requested resource does not exist.")
-var ErrNotHealty = errors.New("The requested minion is not healthy.")
+// MatchNode returns a generic matcher for a given label and field selector.
+func MatchNode(label labels.Selector, field fields.Selector) generic.Matcher {
+	return &generic.SelectionPredicate{
+		Label: label,
+		Field: field,
+		GetAttrs: func(obj runtime.Object) (labels.Set, fields.Set, error) {
+			nodeObj, ok := obj.(*api.Node)
+			if !ok {
+				return nil, nil, fmt.Errorf("not a node")
+			}
+			return labels.Set(nodeObj.ObjectMeta.Labels), NodeToSelectableFields(nodeObj), nil
+		},
+	}
+}
 
-func (rs *REST) Create(ctx api.Context, obj runtime.Object) (<-chan apiserver.RESTResult, error) {
-	minion, ok := obj.(*api.Minion)
-	if !ok {
-		return nil, fmt.Errorf("not a minion: %#v", obj)
+// ResourceLocation returns an URL and transport which one can use to send traffic for the specified node.
+func ResourceLocation(getter ResourceGetter, connection client.ConnectionInfoGetter, ctx api.Context, id string) (*url.URL, http.RoundTripper, error) {
+	name, portReq, valid := util.SplitPort(id)
+	if !valid {
+		return nil, nil, errors.NewBadRequest(fmt.Sprintf("invalid node request %q", id))
 	}
 
-	if errs := validation.ValidateMinion(minion); len(errs) > 0 {
-		return nil, kerrors.NewInvalid("minion", minion.Name, errs)
+	nodeObj, err := getter.Get(ctx, name)
+	if err != nil {
+		return nil, nil, err
 	}
+	node := nodeObj.(*api.Node)
+	hostIP, err := nodeutil.GetNodeHostIP(node)
+	if err != nil {
+		return nil, nil, err
+	}
+	host := hostIP.String()
 
-	api.FillObjectMetaSystemFields(ctx, &minion.ObjectMeta)
-
-	return apiserver.MakeAsync(func() (runtime.Object, error) {
-		// TODO: Need to fill in any server-set fields (uid, timestamp, etc) before
-		// returning minion. Can't do it properly at the moment because the registry
-		// healthchecking, which might cause it to not return the minion at all. Fix
-		// this after we move the healthchecking out of the minion registry.
-		err := rs.registry.CreateMinion(ctx, minion)
+	if portReq == "" || strconv.Itoa(ports.KubeletPort) == portReq {
+		scheme, port, transport, err := connection.GetConnectionInfo(host)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return minion, nil
-	}), nil
-}
-
-func (rs *REST) Delete(ctx api.Context, id string) (<-chan apiserver.RESTResult, error) {
-	minion, err := rs.registry.GetMinion(ctx, id)
-	if minion == nil {
-		return nil, ErrDoesNotExist
+		return &url.URL{
+				Scheme: scheme,
+				Host: net.JoinHostPort(
+					host,
+					strconv.FormatUint(uint64(port), 10),
+				),
+			},
+			transport,
+			nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return apiserver.MakeAsync(func() (runtime.Object, error) {
-		return &api.Status{Status: api.StatusSuccess}, rs.registry.DeleteMinion(ctx, id)
-	}), nil
-}
-
-func (rs *REST) Get(ctx api.Context, id string) (runtime.Object, error) {
-	minion, err := rs.registry.GetMinion(ctx, id)
-	if minion == nil {
-		return nil, ErrDoesNotExist
-	}
-	return minion, err
-}
-
-func (rs *REST) List(ctx api.Context, label, field labels.Selector) (runtime.Object, error) {
-	return rs.registry.ListMinions(ctx)
-}
-
-func (rs *REST) New() runtime.Object {
-	return &api.Minion{}
-}
-
-func (rs *REST) Update(ctx api.Context, obj runtime.Object) (<-chan apiserver.RESTResult, error) {
-	minion, ok := obj.(*api.Minion)
-	if !ok {
-		return nil, fmt.Errorf("not a minion: %#v", obj)
-	}
-
-	// TODO: GetMinion will health check the minion, but we shouldn't require the minion to be
-	// running for updating labels.
-	oldMinion, err := rs.registry.GetMinion(ctx, minion.Name)
-	if err != nil {
-		return nil, err
-	}
-	if errs := validation.ValidateMinionUpdate(oldMinion, minion); len(errs) > 0 {
-		return nil, kerrors.NewInvalid("minion", minion.Name, errs)
-	}
-
-	return apiserver.MakeAsync(func() (runtime.Object, error) {
-		err := rs.registry.UpdateMinion(ctx, minion)
-		if err != nil {
-			return nil, err
-		}
-		return rs.registry.GetMinion(ctx, minion.Name)
-	}), nil
-}
-
-func (rs *REST) toApiMinion(name string) *api.Minion {
-	return &api.Minion{ObjectMeta: api.ObjectMeta{Name: name}}
-}
-
-// ResourceLocation returns a URL to which one can send traffic for the specified minion.
-func (rs *REST) ResourceLocation(ctx api.Context, id string) (string, error) {
-	minion, err := rs.registry.GetMinion(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	host := minion.HostIP
-	if host == "" {
-		host = minion.Name
-	}
-	// TODO: Minion webservers should be secure!
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(ports.KubeletPort)), nil
+	return &url.URL{Host: net.JoinHostPort(host, portReq)}, nil, nil
 }

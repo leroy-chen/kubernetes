@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 Google Inc. All rights reserved.
+# Copyright 2014 The Kubernetes Authors All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,12 +28,19 @@ KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
 source "${KUBE_ROOT}/cluster/kube-env.sh"
 source "${KUBE_ROOT}/cluster/${KUBERNETES_PROVIDER}/util.sh"
 
-echo "Starting cluster using provider: $KUBERNETES_PROVIDER"
+echo "Starting cluster using provider: $KUBERNETES_PROVIDER" >&2
 
+echo "... calling verify-prereqs" >&2
 verify-prereqs
+
+echo "... calling kube-up" >&2
 kube-up
 
+echo "... calling validate-cluster" >&2
 "${KUBE_ROOT}/cluster/validate-cluster.sh"
-setup-monitoring
 
-echo "Done"
+echo -e "Done, listing cluster services:\n" >&2
+"${KUBE_ROOT}/cluster/kubectl.sh" cluster-info
+echo
+
+exit 0

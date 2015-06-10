@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 Google Inc. All rights reserved.
+# Copyright 2014 The Kubernetes Authors All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,11 @@
 function detect-master {
 	echo "KUBE_MASTER_IP: $KUBE_MASTER_IP"
 	echo "KUBE_MASTER: $KUBE_MASTER"
+}
+
+# Get minion names if they are not static.
+function detect-minion-names {
+        echo "MINION_NAMES: ${MINION_NAMES[*]}"
 }
 
 # Get minion IP addresses and store in KUBE_MINION_IP_ADDRESSES[]
@@ -42,8 +47,23 @@ function kube-down {
 	echo "TODO"
 }
 
-# Update a kubernetes cluster with latest source
+# Update a kubernetes cluster
 function kube-push {
+	echo "TODO"
+}
+
+# Prepare update a kubernetes component
+function prepare-push {
+	echo "TODO"
+}
+
+# Update a kubernetes master
+function push-master {
+	echo "TODO"
+}
+
+# Update a kubernetes node
+function push-node {
 	echo "TODO"
 }
 

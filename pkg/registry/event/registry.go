@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,10 +17,7 @@ limitations under the License.
 package event
 
 import (
-	"path"
-
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	etcderr "github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors/etcd"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic"
 	etcdgeneric "github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic/etcd"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
@@ -30,29 +27,27 @@ import (
 // registry implements custom changes to generic.Etcd.
 type registry struct {
 	*etcdgeneric.Etcd
-	ttl uint64
-}
-
-// Create stores the object with a ttl, so that events don't stay in the system forever.
-func (r registry) Create(ctx api.Context, id string, obj runtime.Object) error {
-	err := r.Etcd.Helper.CreateObj(r.Etcd.KeyFunc(id), obj, r.ttl)
-	return etcderr.InterpretCreateError(err, r.Etcd.EndpointName, id)
 }
 
 // NewEtcdRegistry returns a registry which will store Events in the given
 // EtcdHelper. ttl is the time that Events will be retained by the system.
 func NewEtcdRegistry(h tools.EtcdHelper, ttl uint64) generic.Registry {
+	prefix := "/events"
 	return registry{
 		Etcd: &etcdgeneric.Etcd{
 			NewFunc:      func() runtime.Object { return &api.Event{} },
 			NewListFunc:  func() runtime.Object { return &api.EventList{} },
 			EndpointName: "events",
-			KeyRoot:      "/registry/events",
-			KeyFunc: func(id string) string {
-				return path.Join("/registry/events", id)
+			KeyRootFunc: func(ctx api.Context) string {
+				return etcdgeneric.NamespaceKeyRootFunc(ctx, prefix)
+			},
+			KeyFunc: func(ctx api.Context, id string) (string, error) {
+				return etcdgeneric.NamespaceKeyFunc(ctx, prefix, id)
+			},
+			TTLFunc: func(runtime.Object, uint64, bool) (uint64, error) {
+				return ttl, nil
 			},
 			Helper: h,
 		},
-		ttl: ttl,
 	}
 }

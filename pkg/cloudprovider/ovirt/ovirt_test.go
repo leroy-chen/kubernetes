@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -118,7 +118,9 @@ func TestOVirtCloudXmlParsing(t *testing.T) {
 	if len(instances4) != 2 {
 		t.Fatalf("Unexpected number of instance(s): %d", len(instances4))
 	}
-	if instances4[0] != "host1" || instances4[1] != "host3" {
+
+	names := instances4.ListSortedNames()
+	if names[0] != "host1" || names[1] != "host3" {
 		t.Fatalf("Unexpected instance(s): %s", instances4)
 	}
 }

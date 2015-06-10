@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ func testEnsureChain(t *testing.T, protocol Protocol) {
 	// Success.
 	exists, err := runner.EnsureChain(TableNAT, Chain("FOOBAR"))
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if exists {
 		t.Errorf("expected exists = false")
@@ -70,7 +70,7 @@ func testEnsureChain(t *testing.T, protocol Protocol) {
 	// Exists.
 	exists, err = runner.EnsureChain(TableNAT, Chain("FOOBAR"))
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if !exists {
 		t.Errorf("expected exists = true")
@@ -109,7 +109,7 @@ func TestFlushChain(t *testing.T) {
 	// Success.
 	err := runner.FlushChain(TableNAT, Chain("FOOBAR"))
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if fcmd.CombinedOutputCalls != 1 {
 		t.Errorf("expected 1 CombinedOutput() call, got %d", fcmd.CombinedOutputCalls)
@@ -119,6 +119,40 @@ func TestFlushChain(t *testing.T) {
 	}
 	// Failure.
 	err = runner.FlushChain(TableNAT, Chain("FOOBAR"))
+	if err == nil {
+		t.Errorf("expected failure")
+	}
+}
+
+func TestDeleteChain(t *testing.T) {
+	fcmd := exec.FakeCmd{
+		CombinedOutputScript: []exec.FakeCombinedOutputAction{
+			// Success.
+			func() ([]byte, error) { return []byte{}, nil },
+			// Failure.
+			func() ([]byte, error) { return nil, &exec.FakeExitError{1} },
+		},
+	}
+	fexec := exec.FakeExec{
+		CommandScript: []exec.FakeCommandAction{
+			func(cmd string, args ...string) exec.Cmd { return exec.InitFakeCmd(&fcmd, cmd, args...) },
+			func(cmd string, args ...string) exec.Cmd { return exec.InitFakeCmd(&fcmd, cmd, args...) },
+		},
+	}
+	runner := New(&fexec, ProtocolIpv4)
+	// Success.
+	err := runner.DeleteChain(TableNAT, Chain("FOOBAR"))
+	if err != nil {
+		t.Errorf("expected success, got %v", err)
+	}
+	if fcmd.CombinedOutputCalls != 1 {
+		t.Errorf("expected 1 CombinedOutput() call, got %d", fcmd.CombinedOutputCalls)
+	}
+	if !util.NewStringSet(fcmd.CombinedOutputLog[0]...).HasAll("iptables", "-t", "nat", "-X", "FOOBAR") {
+		t.Errorf("wrong CombinedOutput() log, got %s", fcmd.CombinedOutputLog[0])
+	}
+	// Failure.
+	err = runner.DeleteChain(TableNAT, Chain("FOOBAR"))
 	if err == nil {
 		t.Errorf("expected failure")
 	}
@@ -142,9 +176,9 @@ func TestEnsureRuleAlreadyExists(t *testing.T) {
 		},
 	}
 	runner := New(&fexec, ProtocolIpv4)
-	exists, err := runner.EnsureRule(TableNAT, ChainOutput, "abc", "123")
+	exists, err := runner.EnsureRule(Append, TableNAT, ChainOutput, "abc", "123")
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if !exists {
 		t.Errorf("expected exists = true")
@@ -178,9 +212,9 @@ func TestEnsureRuleNew(t *testing.T) {
 		},
 	}
 	runner := New(&fexec, ProtocolIpv4)
-	exists, err := runner.EnsureRule(TableNAT, ChainOutput, "abc", "123")
+	exists, err := runner.EnsureRule(Append, TableNAT, ChainOutput, "abc", "123")
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if exists {
 		t.Errorf("expected exists = false")
@@ -211,7 +245,7 @@ func TestEnsureRuleErrorChecking(t *testing.T) {
 		},
 	}
 	runner := New(&fexec, ProtocolIpv4)
-	_, err := runner.EnsureRule(TableNAT, ChainOutput, "abc", "123")
+	_, err := runner.EnsureRule(Append, TableNAT, ChainOutput, "abc", "123")
 	if err == nil {
 		t.Errorf("expected failure")
 	}
@@ -241,7 +275,7 @@ func TestEnsureRuleErrorCreating(t *testing.T) {
 		},
 	}
 	runner := New(&fexec, ProtocolIpv4)
-	_, err := runner.EnsureRule(TableNAT, ChainOutput, "abc", "123")
+	_, err := runner.EnsureRule(Append, TableNAT, ChainOutput, "abc", "123")
 	if err == nil {
 		t.Errorf("expected failure")
 	}
@@ -270,7 +304,7 @@ func TestDeleteRuleAlreadyExists(t *testing.T) {
 	runner := New(&fexec, ProtocolIpv4)
 	err := runner.DeleteRule(TableNAT, ChainOutput, "abc", "123")
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if fcmd.CombinedOutputCalls != 2 {
 		t.Errorf("expected 2 CombinedOutput() call, got %d", fcmd.CombinedOutputCalls)
@@ -303,7 +337,7 @@ func TestDeleteRuleNew(t *testing.T) {
 	runner := New(&fexec, ProtocolIpv4)
 	err := runner.DeleteRule(TableNAT, ChainOutput, "abc", "123")
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if fcmd.CombinedOutputCalls != 3 {
 		t.Errorf("expected 3 CombinedOutput() calls, got %d", fcmd.CombinedOutputCalls)
@@ -399,7 +433,7 @@ func TestGetIptablesHasCheckCommand(t *testing.T) {
 			t.Errorf("Expected error: %v, Got error: %v", testCase.Err, err)
 		}
 		if err == nil && testCase.Expected != check {
-			t.Errorf("Expected result: %v, Got result: %v")
+			t.Errorf("Expected result: %v, Got result: %v", testCase.Expected, check)
 		}
 	}
 }
@@ -488,7 +522,7 @@ COMMIT
 	runner := &runner{exec: &fexec}
 	exists, err := runner.checkRuleWithoutCheck(TableNAT, ChainPrerouting, "-m", "addrtype", "-j", "DOCKER", "--dst-type", "LOCAL")
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if !exists {
 		t.Errorf("expected exists = true")
@@ -526,7 +560,7 @@ COMMIT
 	runner := &runner{exec: &fexec}
 	exists, err := runner.checkRuleWithoutCheck(TableNAT, ChainPrerouting, "-m", "addrtype", "-j", "DOCKER")
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if exists {
 		t.Errorf("expected exists = false")

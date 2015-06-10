@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,16 +26,27 @@ import (
 )
 
 func GetVersion(w io.Writer, kubeClient client.Interface) {
+	GetClientVersion(w)
+
 	serverVersion, err := kubeClient.ServerVersion()
 	if err != nil {
 		fmt.Printf("Couldn't read version from server: %v\n", err)
 		os.Exit(1)
 	}
 
-	GetClientVersion(w)
-	fmt.Fprintf(w, "Server Version: %#v\n", serverVersion)
+	fmt.Fprintf(w, "Server Version: %#v\n", *serverVersion)
 }
 
 func GetClientVersion(w io.Writer) {
 	fmt.Fprintf(w, "Client Version: %#v\n", version.Get())
+}
+
+func GetApiVersions(w io.Writer, kubeClient client.Interface) {
+	apiVersions, err := kubeClient.ServerAPIVersions()
+	if err != nil {
+		fmt.Printf("Couldn't get available api versions from server: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(w, "Available Server Api Versions: %#v\n", *apiVersions)
 }

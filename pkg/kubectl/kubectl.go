@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,104 +18,18 @@ limitations under the License.
 package kubectl
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"os"
-	"reflect"
 	"strings"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/version"
 )
 
-var apiVersionToUse = "v1beta1"
-
-func GetKubeClient(config *client.Config, matchVersion bool) (*client.Client, error) {
-	// TODO: get the namespace context when kubectl ns is completed
-	c, err := client.New(config)
-	if err != nil {
-		return nil, err
-	}
-
-	if matchVersion {
-		clientVersion := version.Get()
-		serverVersion, err := c.ServerVersion()
-		if err != nil {
-			return nil, fmt.Errorf("couldn't read version from server: %v\n", err)
-		}
-		if s := *serverVersion; !reflect.DeepEqual(clientVersion, s) {
-			return nil, fmt.Errorf("server version (%#v) differs from client version (%#v)!\n", s, clientVersion)
-		}
-	}
-
-	return c, nil
-}
+const kubectlAnnotationPrefix = "kubectl.kubernetes.io/"
 
 type NamespaceInfo struct {
 	Namespace string
-}
-
-// LoadNamespaceInfo parses a NamespaceInfo object from a file path. It creates a file at the specified path if it doesn't exist with the default namespace.
-func LoadNamespaceInfo(path string) (*NamespaceInfo, error) {
-	var ns NamespaceInfo
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		ns.Namespace = api.NamespaceDefault
-		err = SaveNamespaceInfo(path, &ns)
-		return &ns, err
-	}
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	err = json.Unmarshal(data, &ns)
-	if err != nil {
-		return nil, err
-	}
-	return &ns, err
-}
-
-// SaveNamespaceInfo saves a NamespaceInfo object at the specified file path.
-func SaveNamespaceInfo(path string, ns *NamespaceInfo) error {
-	if !util.IsDNSLabel(ns.Namespace) {
-		return fmt.Errorf("namespace %s is not a valid DNS Label", ns.Namespace)
-	}
-	data, err := json.Marshal(ns)
-	err = ioutil.WriteFile(path, data, 0600)
-	return err
-}
-
-// LoadClientAuthInfoOrPrompt parses an AuthInfo object from a file path. It prompts user and creates file if it doesn't exist.
-func LoadClientAuthInfoOrPrompt(path string, r io.Reader) (*clientauth.Info, error) {
-	var auth clientauth.Info
-	// Prompt for user/pass and write a file if none exists.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		auth.User = promptForString("Username", r)
-		auth.Password = promptForString("Password", r)
-		data, err := json.Marshal(auth)
-		if err != nil {
-			return &auth, err
-		}
-		err = ioutil.WriteFile(path, data, 0600)
-		return &auth, err
-	}
-	authPtr, err := clientauth.LoadFromFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return authPtr, nil
-}
-
-func promptForString(field string, r io.Reader) string {
-	fmt.Printf("Please enter %s: ", field)
-	var result string
-	fmt.Fscan(r, &result)
-	return result
 }
 
 // TODO Move to labels package.
@@ -139,18 +53,68 @@ func makeImageList(spec *api.PodSpec) string {
 	return strings.Join(listOfImages(spec), ",")
 }
 
-// ExpandResourceShortcut will return the expanded version of resource
+// OutputVersionMapper is a RESTMapper that will prefer mappings that
+// correspond to a preferred output version (if feasible)
+type OutputVersionMapper struct {
+	meta.RESTMapper
+	OutputVersion string
+}
+
+// RESTMapping implements meta.RESTMapper by prepending the output version to the preferred version list.
+func (m OutputVersionMapper) RESTMapping(kind string, versions ...string) (*meta.RESTMapping, error) {
+	preferred := []string{m.OutputVersion}
+	for _, version := range versions {
+		if len(version) > 0 {
+			preferred = append(preferred, version)
+		}
+	}
+	// if the caller wants to use the default version list, try with the preferred version, and on
+	// error, use the default behavior.
+	if len(preferred) == 1 {
+		if m, err := m.RESTMapper.RESTMapping(kind, preferred...); err == nil {
+			return m, nil
+		}
+		preferred = nil
+	}
+	return m.RESTMapper.RESTMapping(kind, preferred...)
+}
+
+// ShortcutExpander is a RESTMapper that can be used for Kubernetes
+// resources.
+type ShortcutExpander struct {
+	meta.RESTMapper
+}
+
+// VersionAndKindForResource implements meta.RESTMapper. It expands the resource first, then invokes the wrapped
+// mapper.
+func (e ShortcutExpander) VersionAndKindForResource(resource string) (defaultVersion, kind string, err error) {
+	resource = expandResourceShortcut(resource)
+	defaultVersion, kind, err = e.RESTMapper.VersionAndKindForResource(resource)
+	// TODO: remove this once v1beta1 and v1beta2 are deprecated
+	if err == nil && kind == "Minion" {
+		err = fmt.Errorf("Alias minion(s) is deprecated. Use node(s) instead")
+	}
+	return defaultVersion, kind, err
+}
+
+// expandResourceShortcut will return the expanded version of resource
 // (something that a pkg/api/meta.RESTMapper can understand), if it is
 // indeed a shortcut. Otherwise, will return resource unmodified.
-// TODO: Combine with RESTMapper stuff to provide a general solution
-// to this problem.
-func ExpandResourceShortcut(resource string) string {
+func expandResourceShortcut(resource string) string {
 	shortForms := map[string]string{
-		"po": "pods",
-		"rc": "replicationcontrollers",
-		"se": "services",
-		"mi": "minions",
-		"ev": "events",
+		// Please keep this alphabetized
+		"cs":     "componentstatuses",
+		"ev":     "events",
+		"limits": "limitRanges",
+		"no":     "nodes",
+		"po":     "pods",
+		"pv":     "persistentVolumes",
+		"pvc":    "persistentVolumeClaims",
+		"quota":  "resourceQuotas",
+		"rc":     "replicationcontrollers",
+		// DEPRECATED: will be removed before 1.0
+		"se":  "services",
+		"svc": "services",
 	}
 	if expanded, ok := shortForms[resource]; ok {
 		return expanded

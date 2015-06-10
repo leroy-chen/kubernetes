@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,15 +28,5 @@ func TestStringListSet(t *testing.T) {
 	expected := []string{"foo", "bar", "hop"}
 	if reflect.DeepEqual(expected, []string(sl)) == false {
 		t.Errorf("expected: %v, got: %v:", expected, sl)
-	}
-}
-
-func TestStringListSetErr(t *testing.T) {
-	var sl StringList
-	if err := sl.Set(""); err == nil {
-		t.Errorf("expected error for empty string")
-	}
-	if err := sl.Set(","); err == nil {
-		t.Errorf("expected error for list of empty strings")
 	}
 }

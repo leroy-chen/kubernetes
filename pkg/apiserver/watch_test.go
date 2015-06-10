@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,13 +18,18 @@ package apiserver
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	"golang.org/x/net/websocket"
@@ -32,8 +37,8 @@ import (
 
 // watchJSON defines the expected JSON wire equivalent of watch.Event
 type watchJSON struct {
-	Type   watch.EventType `json:"type,omitempty" yaml:"type,omitempty"`
-	Object json.RawMessage `json:"object,omitempty" yaml:"object,omitempty"`
+	Type   watch.EventType `json:"type,omitempty"`
+	Object json.RawMessage `json:"object,omitempty"`
 }
 
 var watchTestTable = []struct {
@@ -47,16 +52,14 @@ var watchTestTable = []struct {
 
 func TestWatchWebsocket(t *testing.T) {
 	simpleStorage := &SimpleRESTStorage{}
-	_ = ResourceWatcher(simpleStorage) // Give compile error if this doesn't work.
-	handler := Handle(map[string]RESTStorage{
-		"foo": simpleStorage,
-	}, codec, "/api", "version", selfLinker)
+	_ = rest.Watcher(simpleStorage) // Give compile error if this doesn't work.
+	handler := handle(map[string]rest.Storage{"simples": simpleStorage})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	dest, _ := url.Parse(server.URL)
 	dest.Scheme = "ws" // Required by websocket, though the server never sees it.
-	dest.Path = "/api/version/watch/foo"
+	dest.Path = "/api/version/watch/simples"
 	dest.RawQuery = ""
 
 	ws, err := websocket.Dial(dest.String(), "", "http://localhost")
@@ -102,15 +105,13 @@ func TestWatchWebsocket(t *testing.T) {
 
 func TestWatchHTTP(t *testing.T) {
 	simpleStorage := &SimpleRESTStorage{}
-	handler := Handle(map[string]RESTStorage{
-		"foo": simpleStorage,
-	}, codec, "/api", "version", selfLinker)
+	handler := handle(map[string]rest.Storage{"simples": simpleStorage})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := http.Client{}
 
 	dest, _ := url.Parse(server.URL)
-	dest.Path = "/api/version/watch/foo"
+	dest.Path = "/api/version/watch/simples"
 	dest.RawQuery = ""
 
 	request, err := http.NewRequest("GET", dest.String(), nil)
@@ -165,14 +166,12 @@ func TestWatchHTTP(t *testing.T) {
 
 func TestWatchParamParsing(t *testing.T) {
 	simpleStorage := &SimpleRESTStorage{}
-	handler := Handle(map[string]RESTStorage{
-		"foo": simpleStorage,
-	}, codec, "/api", "version", selfLinker)
+	handler := handle(map[string]rest.Storage{"simples": simpleStorage})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	dest, _ := url.Parse(server.URL)
-	dest.Path = "/api/version/watch/foo"
+	dest.Path = "/api/" + testVersion + "/watch/simples"
 
 	table := []struct {
 		rawQuery        string
@@ -194,10 +193,10 @@ func TestWatchParamParsing(t *testing.T) {
 			fieldSelector:   "Host=",
 			namespace:       api.NamespaceDefault,
 		}, {
-			rawQuery:        "namespace=watchother&fields=ID%3dfoo&resourceVersion=1492",
+			rawQuery:        "namespace=watchother&fields=id%3dfoo&resourceVersion=1492",
 			resourceVersion: "1492",
 			labelSelector:   "",
-			fieldSelector:   "ID=foo",
+			fieldSelector:   "id=foo",
 			namespace:       "watchother",
 		}, {
 			rawQuery:        "",
@@ -209,8 +208,8 @@ func TestWatchParamParsing(t *testing.T) {
 	}
 
 	for _, item := range table {
-		simpleStorage.requestedLabelSelector = nil
-		simpleStorage.requestedFieldSelector = nil
+		simpleStorage.requestedLabelSelector = labels.Everything()
+		simpleStorage.requestedFieldSelector = fields.Everything()
 		simpleStorage.requestedResourceVersion = "5" // Prove this is set in all cases
 		simpleStorage.requestedResourceNamespace = ""
 		dest.RawQuery = item.rawQuery
@@ -237,16 +236,14 @@ func TestWatchParamParsing(t *testing.T) {
 
 func TestWatchProtocolSelection(t *testing.T) {
 	simpleStorage := &SimpleRESTStorage{}
-	handler := Handle(map[string]RESTStorage{
-		"foo": simpleStorage,
-	}, codec, "/api", "version", selfLinker)
+	handler := handle(map[string]rest.Storage{"simples": simpleStorage})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	defer server.CloseClientConnections()
 	client := http.Client{}
 
 	dest, _ := url.Parse(server.URL)
-	dest.Path = "/api/version/watch/foo"
+	dest.Path = "/api/version/watch/simples"
 	dest.RawQuery = ""
 
 	table := []struct {
@@ -282,5 +279,72 @@ func TestWatchProtocolSelection(t *testing.T) {
 		if !item.isWebsocket && response.StatusCode != http.StatusOK {
 			t.Errorf("Unexpected response %#v", response)
 		}
+	}
+
+}
+
+type fakeTimeoutFactory struct {
+	timeoutCh chan time.Time
+	done      chan struct{}
+}
+
+func (t *fakeTimeoutFactory) TimeoutCh() (<-chan time.Time, func() bool) {
+	return t.timeoutCh, func() bool {
+		defer close(t.done)
+		return true
+	}
+}
+
+func TestWatchHTTPTimeout(t *testing.T) {
+	watcher := watch.NewFake()
+	timeoutCh := make(chan time.Time)
+	done := make(chan struct{})
+
+	// Setup a new watchserver
+	watchServer := &WatchServer{
+		watcher,
+		newCodec,
+		func(obj runtime.Object) {},
+		&fakeTimeoutFactory{timeoutCh, done},
+	}
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		watchServer.ServeHTTP(w, req)
+	}))
+	defer s.Close()
+
+	// Setup a client
+	dest, _ := url.Parse(s.URL)
+	dest.Path = "/api/" + newVersion + "/simple"
+	dest.RawQuery = "watch=true"
+
+	req, _ := http.NewRequest("GET", dest.String(), nil)
+	client := http.Client{}
+	resp, err := client.Do(req)
+	watcher.Add(&Simple{TypeMeta: api.TypeMeta{APIVersion: newVersion}})
+
+	// Make sure we can actually watch an endpoint
+	decoder := json.NewDecoder(resp.Body)
+	var got watchJSON
+	err = decoder.Decode(&got)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Timeout and check for leaks
+	close(timeoutCh)
+	select {
+	case <-done:
+		if !watcher.Stopped {
+			t.Errorf("Leaked watch on timeout")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Errorf("Failed to stop watcher after 100ms of timeout signal")
+	}
+
+	// Make sure we can't receive any more events through the timeout watch
+	err = decoder.Decode(&got)
+	if err != io.EOF {
+		t.Errorf("Unexpected non-error")
 	}
 }

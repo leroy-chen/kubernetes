@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ func TestExecutorNoArgs(t *testing.T) {
 	cmd := ex.Command("true")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Errorf("expected success, got %+v", err)
+		t.Errorf("expected success, got %v", err)
 	}
 	if len(out) != 0 {
 		t.Errorf("expected no output, got %q", string(out))

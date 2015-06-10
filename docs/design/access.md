@@ -15,7 +15,7 @@ Each of these can act as normal users or attackers.
    - External Users: People who are accessing applications running on K8s (e.g. a web site served by webserver running in a container on K8s), but who do not have K8s API access.
    - K8s Users : People who access the K8s API (e.g. create K8s API objects like Pods)
    - K8s Project Admins: People who manage access for some K8s Users
-   - K8s Cluster Admins: People who control the machines, networks, or binaries that comprise a K8s cluster.
+   - K8s Cluster Admins: People who control the machines, networks, or binaries that make up a K8s cluster.
    - K8s Admin means K8s Cluster Admins and K8s Project Admins taken together.
 
 ### Threats
@@ -65,7 +65,7 @@ Cluster in Large organization:
 
 Org-run cluster:
    - organization that runs K8s master components is same as the org that runs apps on K8s.
-   - Minions may be on-premises VMs or physical machines; Cloud VMs; or a mix.
+   - Nodes may be on-premises VMs or physical machines; Cloud VMs; or a mix.
 
 Hosted cluster:
   - Offering K8s API as a service, or offering a Paas or Saas built on K8s
@@ -151,7 +151,7 @@ In the Simple Profile:
 
 Namespaces versus userAccount vs Labels:
 - `userAccount`s are intended for audit logging (both name and UID should be logged), and to define who has access to `namespace`s.
-- `labels` (see [docs/labels.md](labels.md)) should be used to distinguish pods, users, and other objects that cooperate towards a common goal but are different in some way, such as version, or responsibilities.
+- `labels` (see [docs/labels.md](/docs/labels.md)) should be used to distinguish pods, users, and other objects that cooperate towards a common goal but are different in some way, such as version, or responsibilities.
 - `namespace`s prevent name collisions between uncoordinated groups of people, and provide a place to attach common policies for co-operating groups of people.
 
 
@@ -212,7 +212,7 @@ Policy objects may be applicable only to a single namespace or to all namespaces
 
 ## Accounting
 
-The API should have a `quota` concept (see https://github.com/GoogleCloudPlatform/kubernetes/issues/442).  A quota object relates a namespace (and optionally a label selector) to a maximum quantity of resources that may be used (see [resources.md](resources.md)).
+The API should have a `quota` concept (see https://github.com/GoogleCloudPlatform/kubernetes/issues/442).  A quota object relates a namespace (and optionally a label selector) to a maximum quantity of resources that may be used (see [resources.md](/docs/resources.md)).
 
 Initially:
 - a `quota` object is immutable.
@@ -223,7 +223,7 @@ Initially:
 Improvements:
 - allow one namespace to charge the quota for one or more other namespaces.  This would be controlled by a policy which allows changing a billing_namespace= label on an object.
 - allow quota to be set by namespace owners for (namespace x label) combinations (e.g. let "webserver" namespace use 100 cores, but to prevent accidents, don't allow "webserver" namespace and "instance=test" use more than 10 cores.
-- tools to help write consistent quota config files based on number of minions, historical namespace usages, QoS needs, etc.
+- tools to help write consistent quota config files based on number of nodes, historical namespace usages, QoS needs, etc.
 - way for K8s Cluster Admin to incrementally adjust Quota objects.
 
 Simple profile:
@@ -246,3 +246,6 @@ Initial implementation:
 Improvements:
 - API server does logging instead.
 - Policies to drop logging for high rate trusted API calls, or by users performing audit or other sensitive functions.
+
+
+[![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/docs/design/access.md?pixel)]()

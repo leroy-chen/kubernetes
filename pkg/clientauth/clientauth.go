@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ Example:
     clientConfig.Host = "example.com:4901"
     clientConfig = info.MergeWithConfig()
     client := client.New(clientConfig)
-    client.ListPods()
+    client.Pods(ns).List()
 */
 package clientauth
 
@@ -116,4 +116,10 @@ func (info Info) MergeWithConfig(c client.Config) (client.Config, error) {
 		config.Insecure = *info.Insecure
 	}
 	return config, nil
+}
+
+func (info Info) Complete() bool {
+	return len(info.User) > 0 ||
+		len(info.CertFile) > 0 ||
+		len(info.BearerToken) > 0
 }

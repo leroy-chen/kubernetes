@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,8 +22,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/golang/glog"
 )
@@ -39,32 +41,69 @@ type DockerConfigEntry struct {
 	Email    string
 }
 
-const (
-	dockerConfigFileLocation = ".dockercfg"
+var (
+	preferredPathLock sync.Mutex
+	preferredPath     = ""
+	workingDirPath    = ""
+	homeDirPath       = os.Getenv("HOME")
+	rootDirPath       = "/"
+
+	configFileName = ".dockercfg"
 )
 
-func ReadDockerConfigFile() (cfg DockerConfig, err error) {
-	// TODO(mattmoor): This causes the Kubelet to read /.dockercfg,
-	// which is incorrect.  It should come from $HOME/.dockercfg.
-	absDockerConfigFileLocation, err := filepath.Abs(dockerConfigFileLocation)
-	if err != nil {
-		glog.Errorf("while trying to canonicalize %s: %v", dockerConfigFileLocation, err)
-	}
-	absDockerConfigFileLocation, err = filepath.Abs(dockerConfigFileLocation)
-	glog.V(2).Infof("looking for .dockercfg at %s", absDockerConfigFileLocation)
-	contents, err := ioutil.ReadFile(absDockerConfigFileLocation)
-	if err != nil {
-		glog.Errorf("while trying to read %s: %v", absDockerConfigFileLocation, err)
-		return nil, err
-	}
+func SetPreferredDockercfgPath(path string) {
+	preferredPathLock.Lock()
+	defer preferredPathLock.Unlock()
+	preferredPath = path
+}
 
-	return readDockerConfigFileFromBytes(contents)
+func GetPreferredDockercfgPath() string {
+	preferredPathLock.Lock()
+	defer preferredPathLock.Unlock()
+	return preferredPath
+}
+
+func ReadDockerConfigFile() (cfg DockerConfig, err error) {
+	dockerConfigFileLocations := []string{GetPreferredDockercfgPath(), workingDirPath, homeDirPath, rootDirPath}
+	for _, configPath := range dockerConfigFileLocations {
+		absDockerConfigFileLocation, err := filepath.Abs(filepath.Join(configPath, configFileName))
+		if err != nil {
+			glog.Errorf("while trying to canonicalize %s: %v", configPath, err)
+			continue
+		}
+		glog.V(4).Infof("looking for .dockercfg at %s", absDockerConfigFileLocation)
+		contents, err := ioutil.ReadFile(absDockerConfigFileLocation)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			glog.V(4).Infof("while trying to read %s: %v", absDockerConfigFileLocation, err)
+			continue
+		}
+		cfg, err := readDockerConfigFileFromBytes(contents)
+		if err == nil {
+			glog.V(4).Infof("found .dockercfg at %s", absDockerConfigFileLocation)
+			return cfg, nil
+		}
+	}
+	return nil, fmt.Errorf("couldn't find valid .dockercfg after checking in %v", dockerConfigFileLocations)
+}
+
+// HttpError wraps a non-StatusOK error code as an error.
+type HttpError struct {
+	StatusCode int
+	Url        string
+}
+
+// Error implements error
+func (he *HttpError) Error() string {
+	return fmt.Sprintf("http status code: %d while fetching url %s",
+		he.StatusCode, he.Url)
 }
 
 func ReadUrl(url string, client *http.Client, header *http.Header) (body []byte, err error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		glog.Errorf("while creating request to read %s: %v", url, err)
 		return nil, err
 	}
 	if header != nil {
@@ -72,21 +111,20 @@ func ReadUrl(url string, client *http.Client, header *http.Header) (body []byte,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		glog.Errorf("while trying to read %s: %v", url, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		err := fmt.Errorf("http status code: %d while fetching url: %v", resp.StatusCode)
-		glog.Errorf("while trying to read %s: %v", url, err)
 		glog.V(2).Infof("body of failing http response: %v", resp.Body)
-		return nil, err
+		return nil, &HttpError{
+			StatusCode: resp.StatusCode,
+			Url:        url,
+		}
 	}
 
 	contents, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		glog.Errorf("while trying to read %s: %v", url, err)
 		return nil, err
 	}
 
@@ -112,10 +150,10 @@ func readDockerConfigFileFromBytes(contents []byte) (cfg DockerConfig, err error
 // dockerConfigEntryWithAuth is used solely for deserializing the Auth field
 // into a dockerConfigEntry during JSON deserialization.
 type dockerConfigEntryWithAuth struct {
-	Username string
-	Password string
-	Email    string
-	Auth     string
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Auth     string `json:"auth,omitempty"`
 }
 
 func (ident *DockerConfigEntry) UnmarshalJSON(data []byte) error {
@@ -137,6 +175,13 @@ func (ident *DockerConfigEntry) UnmarshalJSON(data []byte) error {
 	return err
 }
 
+func (ident DockerConfigEntry) MarshalJSON() ([]byte, error) {
+	toEncode := dockerConfigEntryWithAuth{ident.Username, ident.Password, ident.Email, ""}
+	toEncode.Auth = encodeDockerConfigFieldAuth(ident.Username, ident.Password)
+
+	return json.Marshal(toEncode)
+}
+
 // decodeDockerConfigFieldAuth deserializes the "auth" field from dockercfg into a
 // username and a password. The format of the auth field is base64(<username>:<password>).
 func decodeDockerConfigFieldAuth(field string) (username, password string, err error) {
@@ -155,4 +200,10 @@ func decodeDockerConfigFieldAuth(field string) (username, password string, err e
 	password = parts[1]
 
 	return
+}
+
+func encodeDockerConfigFieldAuth(username, password string) string {
+	fieldValue := username + ":" + password
+
+	return base64.StdEncoding.EncodeToString([]byte(fieldValue))
 }

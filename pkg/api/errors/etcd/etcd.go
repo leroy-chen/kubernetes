@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ func InterpretCreateError(err error, kind, name string) error {
 	}
 }
 
-// InterpretUpdateError converts a generic etcd error on a create
+// InterpretUpdateError converts a generic etcd error on a update
 // operation into the appropriate API error.
 func InterpretUpdateError(err error, kind, name string) error {
 	switch {
@@ -54,7 +54,7 @@ func InterpretUpdateError(err error, kind, name string) error {
 	}
 }
 
-// InterpretDeleteError converts a generic etcd error on a create
+// InterpretDeleteError converts a generic etcd error on a delete
 // operation into the appropriate API error.
 func InterpretDeleteError(err error, kind, name string) error {
 	switch {

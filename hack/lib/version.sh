@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 Google Inc. All rights reserved.
+# Copyright 2014 The Kubernetes Authors All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -60,10 +60,10 @@ kube::version::get_version_vars() {
       # Try to match the "git describe" output to a regex to try to extract
       # the "major" and "minor" versions and whether this is the exact tagged
       # version or whether the tree is between two tagged versions.
-      if [[ "${KUBE_GIT_VERSION}" =~ ^v([0-9]+)\.([0-9]+)([.-].*)?$ ]]; then
+      if [[ "${KUBE_GIT_VERSION}" =~ ^v([0-9]+)\.([0-9]+)(\.[0-9]+)?([-].*)?$ ]]; then
         KUBE_GIT_MAJOR=${BASH_REMATCH[1]}
         KUBE_GIT_MINOR=${BASH_REMATCH[2]}
-        if [[ -n "${BASH_REMATCH[3]}" ]]; then
+        if [[ -n "${BASH_REMATCH[4]}" ]]; then
           KUBE_GIT_MINOR+="+"
         fi
       fi

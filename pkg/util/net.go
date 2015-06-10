@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -37,6 +37,10 @@ func (ip *IP) Set(value string) error {
 	return nil
 }
 
+func (*IP) Type() string {
+	return "ip"
+}
+
 // IPNet adapts net.IPNet for use as a flag.
 type IPNet net.IPNet
 
@@ -52,4 +56,8 @@ func (ipnet *IPNet) Set(value string) error {
 	}
 	*ipnet = IPNet(*n)
 	return nil
+}
+
+func (*IPNet) Type() string {
+	return "ipNet"
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2014 The Kubernetes Authors All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ func (r *udpEchoServer) Loop() {
 	for {
 		n, cliAddr, err := r.ReadFrom(buffer[0:])
 		if err != nil {
-			fmt.Printf("ReadFrom failed: %#v\n", err)
+			fmt.Printf("ReadFrom failed: %v\n", err)
 			continue
 		}
 		r.WriteTo(buffer[0:n], cliAddr)
